@@ -608,8 +608,14 @@ const struct message requests[] =
          "  mno \r\n"
          "\t \tqrs\r\n"
          "Line2: \t line2\t\r\n"
+         "Line3:\r\n"
+         " line3\r\n"
+         "Line4: \r\n"
+         " \r\n"
+         "Connection:\r\n"
+         " close\r\n"
          "\r\n"
-  ,.should_keep_alive= TRUE
+  ,.should_keep_alive= FALSE
   ,.message_complete_on_eof= FALSE
   ,.http_major= 1
   ,.http_minor= 1
@@ -618,9 +624,12 @@ const struct message requests[] =
   ,.fragment= ""
   ,.request_path= "/"
   ,.request_url= "/"
-  ,.num_headers= 2
-  ,.headers= { { "Line1", "abcdefghijklmno qrs" }
+  ,.num_headers= 5
+  ,.headers= { { "Line1", "abc\tdef ghi\t\tjkl  mno \t \tqrs" }
              , { "Line2", "line2\t" }
+             , { "Line3", "line3" }
+             , { "Line4", "" }
+             , { "Connection", "close" },
              }
   ,.body= ""
   }
@@ -901,6 +910,43 @@ const struct message requests[] =
   ,.port= 1234
   ,.num_headers= 0
   ,.headers= { }
+  ,.body= ""
+  }
+
+#define LINE_FOLDING_IN_HEADER_WITH_LF 34
+, {.name= "line folding in header value"
+  ,.type= HTTP_REQUEST
+  ,.raw= "GET / HTTP/1.1\n"
+         "Line1:   abc\n"
+         "\tdef\n"
+         " ghi\n"
+         "\t\tjkl\n"
+         "  mno \n"
+         "\t \tqrs\n"
+         "Line2: \t line2\t\n"
+         "Line3:\n"
+         " line3\n"
+         "Line4: \n"
+         " \n"
+         "Connection:\n"
+         " close\n"
+         "\n"
+  ,.should_keep_alive= FALSE
+  ,.message_complete_on_eof= FALSE
+  ,.http_major= 1
+  ,.http_minor= 1
+  ,.method= HTTP_GET
+  ,.query_string= ""
+  ,.fragment= ""
+  ,.request_path= "/"
+  ,.request_url= "/"
+  ,.num_headers= 5
+  ,.headers= { { "Line1", "abc\tdef ghi\t\tjkl  mno \t \tqrs" }
+             , { "Line2", "line2\t" }
+             , { "Line3", "line3" }
+             , { "Line4", "" }
+             , { "Connection", "close" },
+             }
   ,.body= ""
   }
 
@@ -2938,7 +2984,7 @@ test_header_content_length_overflow_error (void)
   "HTTP/1.1 200 OK\r\n"                                                       \
   "Content-Length: " #size "\r\n"                                             \
   "\r\n"
-  const char a[] = X(18446744073709551614); /* 2^64-2 */
+  const char a[] = X(1844674407370955160);  /* 2^64 / 10 - 1 */
   const char b[] = X(18446744073709551615); /* 2^64-1 */
   const char c[] = X(18446744073709551616); /* 2^64   */
 #undef X
@@ -2956,7 +3002,7 @@ test_chunk_content_length_overflow_error (void)
     "\r\n"                                                                    \
     #size "\r\n"                                                              \
     "..."
-  const char a[] = X(FFFFFFFFFFFFFFFE);  /* 2^64-2 */
+  const char a[] = X(FFFFFFFFFFFFFFE);   /* 2^64 / 16 - 1 */
   const char b[] = X(FFFFFFFFFFFFFFFF);  /* 2^64-1 */
   const char c[] = X(10000000000000000); /* 2^64   */
 #undef X

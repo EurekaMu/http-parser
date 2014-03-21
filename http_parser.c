@@ -280,6 +280,9 @@ enum state
 
   , s_header_field_start
   , s_header_field
+  , s_header_value_discard_ws
+  , s_header_value_discard_ws_almost_done
+  , s_header_value_discard_lws
   , s_header_value_start
   , s_header_value
   , s_header_value_lws
@@ -650,7 +653,7 @@ size_t http_parser_execute (http_parser *parser,
        * than any reasonable request or response so this should never affect
        * day-to-day operation.
        */
-      if (parser->nread > HTTP_MAX_HEADER_SIZE) {
+      if (parser->nread > (HTTP_MAX_HEADER_SIZE)) {
         SET_ERRNO(HPE_HEADER_OVERFLOW);
         goto error;
       }
@@ -1380,7 +1383,7 @@ size_t http_parser_execute (http_parser *parser,
         }
 
         if (ch == ':') {
-          parser->state = s_header_value_start;
+          parser->state = s_header_value_discard_ws;
           CALLBACK_DATA(header_field);
           break;
         }
@@ -1401,27 +1404,27 @@ size_t http_parser_execute (http_parser *parser,
         goto error;
       }
 
-      case s_header_value_start:
-      {
+      case s_header_value_discard_ws:
         if (ch == ' ' || ch == '\t') break;
 
-        MARK(header_value);
-
-        parser->state = s_header_value;
-        parser->index = 0;
-
         if (ch == CR) {
-          parser->header_state = h_general;
-          parser->state = s_header_almost_done;
-          CALLBACK_DATA(header_value);
+          parser->state = s_header_value_discard_ws_almost_done;
           break;
         }
 
         if (ch == LF) {
-          parser->state = s_header_field_start;
-          CALLBACK_DATA(header_value);
+          parser->state = s_header_value_discard_lws;
           break;
         }
+
+        /* FALLTHROUGH */
+
+      case s_header_value_start:
+      {
+        MARK(header_value);
+
+        parser->state = s_header_value;
+        parser->index = 0;
 
         c = LOWER(ch);
 
@@ -1509,8 +1512,8 @@ size_t http_parser_execute (http_parser *parser,
             t *= 10;
             t += ch - '0';
 
-            /* Overflow? */
-            if (t < parser->content_length || t == ULLONG_MAX) {
+            /* Overflow? Test against a conservative limit for simplicity. */
+            if ((ULLONG_MAX - 10) / 10 < parser->content_length) {
               SET_ERRNO(HPE_INVALID_CONTENT_LENGTH);
               goto error;
             }
@@ -1570,7 +1573,17 @@ size_t http_parser_execute (http_parser *parser,
         STRICT_CHECK(ch != LF);
 
         parser->state = s_header_value_lws;
+        break;
+      }
 
+      case s_header_value_lws:
+      {
+        if (ch == ' ' || ch == '\t') {
+          parser->state = s_header_value_start;
+          goto reexecute_byte;
+        }
+
+        /* finished the header */
         switch (parser->header_state) {
           case h_connection_keep_alive:
             parser->flags |= F_CONNECTION_KEEP_ALIVE;
@@ -1585,19 +1598,29 @@ size_t http_parser_execute (http_parser *parser,
             break;
         }
 
+        parser->state = s_header_field_start;
+        goto reexecute_byte;
+      }
+
+      case s_header_value_discard_ws_almost_done:
+      {
+        STRICT_CHECK(ch != LF);
+        parser->state = s_header_value_discard_lws;
         break;
       }
 
-      case s_header_value_lws:
+      case s_header_value_discard_lws:
       {
-        if (ch == ' ' || ch == '\t')
-          parser->state = s_header_value_start;
-        else
-        {
+        if (ch == ' ' || ch == '\t') {
+          parser->state = s_header_value_discard_ws;
+          break;
+        } else {
+          /* header value was empty */
+          MARK(header_value);
           parser->state = s_header_field_start;
+          CALLBACK_DATA_NOADVANCE(header_value);
           goto reexecute_byte;
         }
-        break;
       }
 
       case s_headers_almost_done:
@@ -1782,8 +1805,8 @@ size_t http_parser_execute (http_parser *parser,
         t *= 16;
         t += unhex_val;
 
-        /* Overflow? */
-        if (t < parser->content_length || t == ULLONG_MAX) {
+        /* Overflow? Test against a conservative limit for simplicity. */
+        if ((ULLONG_MAX - 16) / 16 < parser->content_length) {
           SET_ERRNO(HPE_INVALID_CONTENT_LENGTH);
           goto error;
         }
